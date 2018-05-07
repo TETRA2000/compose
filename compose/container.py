@@ -264,6 +264,9 @@ class Container(object):
     def start_exec(self, exec_id, **options):
         return self.client.exec_start(exec_id, **options)
 
+    def get_archive(self, **options):
+        return self.client.get_archive(self.id, **options)
+
     def rename_to_tmp_name(self):
         """Rename the container to a hopefully unique temporary container name
         by prepending the short id.

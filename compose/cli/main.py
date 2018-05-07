@@ -11,6 +11,8 @@ import pipes
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from distutils.spawn import find_executable
 from inspect import getdoc
 from operator import attrgetter
@@ -32,6 +34,7 @@ from ..config.serialize import serialize_config
 from ..config.types import VolumeSpec
 from ..const import COMPOSEFILE_V2_2 as V2_2
 from ..const import IS_WINDOWS_PLATFORM
+from ..const import LABEL_CONTAINER_NUMBER
 from ..errors import StreamParseError
 from ..progress_stream import StreamOutputError
 from ..project import NoSuchService
@@ -215,6 +218,7 @@ class TopLevelCommand(object):
       build              Build or rebuild services
       bundle             Generate a Docker bundle from the Compose file
       config             Validate and view the Compose file
+      cp                 Copy files/folders
       create             Create services
       down               Stop and remove containers, networks, images, and volumes
       events             Receive real time events from containers
@@ -384,6 +388,68 @@ class TopLevelCommand(object):
             return
 
         print(serialize_config(compose_config, image_digests, not options['--no-interpolate']))
+
+    def cp(self, options):
+
+        """
+        Copy files/folders between a container and the local filesystem
+
+        Usage:
+            cp [options] SRC DEST
+
+        Options:
+            -a, --archive       Archive mode (copy all uid/gid information)
+            -L, --follow-link   Always follow symbol link in SRC_PATH
+        """
+        # TODO add detailed docs about SRC and DEST
+
+        src = options['SRC']
+        dest = options['DEST']
+
+        print(split_cp_arg(src))
+        print(split_cp_arg(dest))
+
+        src_service, src_path = split_cp_arg(src)
+        dest_service, dest_path = split_cp_arg(dest)
+
+        if len(src_service) > 0 and len(dest_service) > 0:
+            # Copy between containers isn't supported in docker-cli either. So we'll ignore.
+            print("Copy between containers isn't supported.")
+            # TODO cleanup
+            sys.exit(-1)
+
+        elif (not src_service) and (not dest_service):
+            # TODO cleanup
+            print("Please specify either source container or destination container.")
+            sys.exit(-1)
+
+        print(options)
+        print(src_service)
+        print(src_path)
+        print(dest_service)
+        print(dest_path)
+
+        # TODO check followLink option
+
+        service = self.project.get_services([src_service], include_deps=False)[0]
+        # TODO
+        number = 1
+        # TODO fix when container isn't exist
+        container = service.containers(
+            stopped=True,
+            labels=['{0}={1}'.format(LABEL_CONTAINER_NUMBER, number)]
+        )[0]
+
+        with tempfile.NamedTemporaryFile(delete=False) as destination:
+            strm, stat = container.get_archive(path=src_path)
+            for d in strm:
+                destination.write(d)
+            destination.seek(0)
+            print(destination)
+
+            tar = tarfile.open(destination.name, 'r')
+            tar.extractall(dest_path)
+            tar.close()
 
     def create(self, options):
         """
@@ -1607,3 +1673,20 @@ def warn_for_swarm_mode(client):
 
 def set_no_color_if_clicolor(no_color_flag):
     return no_color_flag or os.environ.get('CLICOLOR') == "0"
+
+
+def split_cp_arg(arg):
+    """
+    This is same as `splitCpArg` in docker-cli.
+    https://github.com/docker/cli/blob/ae1618713f83e7da07317d579d0675f578de22fa/cli/command/container/cp.go#L289
+    """
+
+    if os.path.isabs(arg):
+        return ("", arg)
+
+    parts = arg.split(":")
+
+    if len(parts) == 1 or parts[0].startswith("."):
+        return ("", arg)
+
+    return (parts[0], parts[1])
